@@ -3,6 +3,9 @@
 #include <cerrno>
 #include <unistd.h>   // usleep
 
+// External cleanup function that will be called before exit
+extern void cleanGpio();
+
 Sequencer* Sequencer::gInstance = nullptr;
 
 ////////////////////////////////////////////
@@ -248,8 +251,13 @@ void Sequencer::sigintHandler(int signo)
     {
         std::cout << "\nSIGINT received -> Stopping services...\n";
         gInstance->stopServices();
-        // Pint final stats
+        // Print final stats
         gInstance->printStatistics();
+        
+        // Call the cleanup function before exit - THIS IS THE MODIFICATION
+        std::cout << "Cleaning up GPIO before exit...\n";
+        cleanGpio();
+        
         // Then exit
         std::_Exit(EXIT_SUCCESS);
     }
