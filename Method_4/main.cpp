@@ -129,10 +129,10 @@ int main() {
     Sequencer seq;
     
     // Add toggle service (100ms period)
-    seq.addService(toggleGpio, 1, 97, 100);
+    seq.addService("tglGpio",toggleGpio, 1, 97, 100);
     
     // Start sequencer
-    seq.startServices();
+    seq.startServices(10);
     
     std::cout << "Toggling GPIO 23 every 100ms... Press Ctrl+C to exit" << std::endl;
     
