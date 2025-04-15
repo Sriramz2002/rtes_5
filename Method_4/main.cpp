@@ -15,6 +15,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/mman.h>
+#include <cstring>
 
 // Quit flag
 std::atomic<bool> quit(false);
