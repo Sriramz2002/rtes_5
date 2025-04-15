@@ -5,7 +5,7 @@
 
 CXX = g++
 CXXFLAGS = -std=c++20 -Wall -Werror -pedantic
-LDFLAGS = -pthread
+LDFLAGS = -pthread -lrt -lgpiod
 
 TARGET = SequencerDemo
 

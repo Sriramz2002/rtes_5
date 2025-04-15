@@ -23,7 +23,7 @@
  }
  
  // GPIO number for pin 23
- const char* GPIO_NUM = "23";
+ const char* GPIO_NUM = "535";
  
  int setupGpio() {
      // Open export file
@@ -68,17 +68,24 @@
  }
  
  void cleanGpio() {
-     // Unexport GPIO when done
-     // This removes the GPIO from userspace control
-     int fd = open("/sys/class/gpio/unexport", O_WRONLY);
-     if (fd == -1) {
-         perror("Unexport failed");
-         return;
-     }
-     write(fd, GPIO_NUM, strlen(GPIO_NUM));
-     close(fd);
-     std::cout << "GPIO " << GPIO_NUM << " cleaned up" << std::endl;
- }
+    // First set direction back to input (safer state)
+    std::string dirPath = "/sys/class/gpio/gpio" + std::string(GPIO_NUM) + "/direction";
+    int fd = open(dirPath.c_str(), O_WRONLY);
+    if (fd != -1) {
+        write(fd, "in", 2);
+        close(fd);
+    }
+    
+    // Then unexport GPIO
+    fd = open("/sys/class/gpio/unexport", O_WRONLY);
+    if (fd == -1) {
+        perror("Unexport failed");
+        return;
+    }
+    write(fd, GPIO_NUM, strlen(GPIO_NUM));
+    close(fd);
+    std::cout << "GPIO " << GPIO_NUM << " cleaned up" << std::endl;
+}
  
  void toggleGpio() {
      static int state = 0;

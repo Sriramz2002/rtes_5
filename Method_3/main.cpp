@@ -1,119 +1,157 @@
 /*
- * GPIO 23 toggle using ioctl interface (Method 3)
- * Build: g++ --std=c++23 -Wall -Werror -pedantic gpio_ioctl.cpp -o gpio_ioctl
+ * GPIO 23 toggle implementation using libgpiod (Method 3)
+ * Build: g++ --std=c++20 -Wall -Werror -pedantic main.cpp Sequencer.cpp -o gpio_method3 -pthread -lrt -lgpiod
  */
 
- #include "Sequencer.hpp"
- #include <csignal>
- #include <chrono>
- #include <thread>
- #include <atomic>
- #include <cstdio>
- #include <fcntl.h>
- #include <unistd.h>
- #include <sys/ioctl.h>
- #include <linux/gpio.h>
- #include <cstring>
- #include <iostream>
- 
- // Quit signal flag
- std::atomic<bool> stop(false);
- 
- // Signal handler
- void sigCatch(int sig) {
-     stop = true;
- }
- 
- // File descriptors for GPIO access
- int chip = -1;
- int line = -1;
- 
- bool setupGpio() {
-     // Open GPIO chip device file
-     // This uses the character device interface introduced in Linux 4.8+
-     chip = open("/dev/gpiochip0", O_RDWR);
-     if (chip < 0) {
-         perror("Open GPIO chip failed");
-         return false;
-     }
- 
-     // Set up GPIO request structure
-     // IOCTL is used to get a handle to the specific GPIO line
-     struct gpiohandle_request req = {};
-     req.lineoffsets[0] = 23;  // Using GPIO 23
-     req.flags = GPIOHANDLE_REQUEST_OUTPUT;  // Set as output
-     req.lines = 1;  // Request 1 line
-     req.default_values[0] = 0;  // Initial value low
-     std::strcpy(req.consumer_label, "gpio_toggle");  // Name our controller
- 
-     // Request GPIO line handle via ioctl
-     // This gives us a file descriptor that controls the specific GPIO line
-     if (ioctl(chip, GPIO_GET_LINEHANDLE_IOCTL, &req) < 0) {
-         perror("GPIO line request failed");
-         close(chip);
-         chip = -1;
-         return false;
-     }
- 
-     // Store the line file descriptor
-     line = req.fd;
-     std::cout << "GPIO 23 initialized via ioctl" << std::endl;
-     return true;
- }
- 
- void cleanGpio() {
-     // Close file descriptors
-     if (line >= 0) close(line);
-     if (chip >= 0) close(chip);
-     line = -1;
-     chip = -1;
-     std::cout << "GPIO 23 resources released" << std::endl;
- }
- 
- void toggleGpio() {
-     static bool state = false;
-     if (line < 0) return;  // Safety check
- 
-     // Data structure for setting GPIO values
-     struct gpiohandle_data data = {};
-     data.values[0] = state ? 1 : 0;
-     
-     // Set GPIO value using ioctl
-     // This directly communicates with the kernel's GPIO subsystem
-     ioctl(line, GPIOHANDLE_SET_LINE_VALUES_IOCTL, &data);
- 
-     // Toggle state for next call
-     state = !state;
- }
- 
- int main() {
-     // Register signal handler
-     std::signal(SIGINT, sigCatch);
-     
-     std::cout << "Starting GPIO 23 toggle (Method 3: ioctl)" << std::endl;
-     
-     // Initialize GPIO with ioctl
-     if (!setupGpio()) {
-         std::cerr << "Failed to set up GPIO 23" << std::endl;
-         return 1;
-     }
-     
-     // Create sequencer and add service
-     Sequencer seq;
-     seq.addService(toggleGpio, 1, 97, 100);
-     seq.startServices();
-     
-     std::cout << "Toggling GPIO 23 every 100ms... Press Ctrl+C to exit" << std::endl;
-     
-     // Wait for termination signal
-     while (!stop) {
-         std::this_thread::sleep_for(std::chrono::milliseconds(100));
-     }
-     
-     // Clean up
-     seq.stopServices();
-     cleanGpio();
-     
-     std::cout << "Program terminated" << std::endl;
-     return 0;
- }
+#include "Sequencer.hpp"
+#include <csignal>
+#include <chrono>
+#include <thread>
+#include <atomic>
+#include <cstdio>
+#include <iostream>
+#include <gpiod.h>   // libgpiod
+
+// Global termination flag
+std::atomic<bool> quit(false);
+
+// Signal handler for Ctrl+C
+void sigHandler(int sig) {
+    quit = true;
+}
+
+// RAII class for GPIO handling with libgpiod
+class GpioHandler {
+private:
+    gpiod_chip* chip;
+    gpiod_line* line;
+    bool initialized;
+    int pin_number;
+    
+public:
+    // Constructor
+    explicit GpioHandler(int pin) : 
+        chip(nullptr), 
+        line(nullptr), 
+        initialized(false),
+        pin_number(pin) {}
+    
+    // Initialize GPIO
+    bool init() {
+        // Open the default GPIO chip
+        chip = gpiod_chip_open_by_name("gpiochip0");
+        if (!chip) {
+            std::cerr << "Failed to open gpiochip0" << std::endl;
+            return false;
+        }
+
+        // Get the specified GPIO line
+        line = gpiod_chip_get_line(chip, pin_number);
+        if (!line) {
+            std::cerr << "Failed to get GPIO line " << pin_number << std::endl;
+            gpiod_chip_close(chip);
+            chip = nullptr;
+            return false;
+        }
+
+        // Request the line as output with initial value 0
+        int req = gpiod_line_request_output(line, "gpio_toggle", 0);
+        if (req < 0) {
+            std::cerr << "Failed to request GPIO line as output" << std::endl;
+            gpiod_chip_close(chip);
+            chip = nullptr;
+            line = nullptr;
+            return false;
+        }
+
+        initialized = true;
+        std::cout << "GPIO " << pin_number << " initialized using libgpiod" << std::endl;
+        return true;
+    }
+    
+    // Toggle GPIO state
+    void toggle() {
+        if (!initialized) {
+            std::cerr << "GPIO not initialized" << std::endl;
+            return;
+        }
+        
+        static bool state = false;
+        state = !state;
+        
+        // Set the GPIO value
+        int ret = gpiod_line_set_value(line, state ? 1 : 0);
+        if (ret < 0) {
+            std::cerr << "Error setting GPIO value" << std::endl;
+        }
+    }
+    
+    // Release GPIO resources
+    void cleanup() {
+        if (!initialized) return;
+        
+        std::cout << "Cleaning up GPIO " << pin_number << "..." << std::endl;
+        
+        // Set to input mode first (safer default state)
+        gpiod_line_release(line);
+        
+        // Close the GPIO chip
+        gpiod_chip_close(chip);
+        
+        line = nullptr;
+        chip = nullptr;
+        initialized = false;
+        std::cout << "GPIO " << pin_number << " cleaned up" << std::endl;
+    }
+    
+    // Destructor
+    ~GpioHandler() {
+        cleanup();
+    }
+};
+
+// Global GPIO handler
+GpioHandler gpio(23);  // Using GPIO 23
+
+// Function to toggle GPIO that will be called by sequencer
+void toggleGpio() {
+    gpio.toggle();
+}
+
+// GPIO cleanup function that will be called before exit
+void cleanGpio() {
+    gpio.cleanup();
+}
+
+int main() {
+    // Setup signal handler
+    std::signal(SIGINT, sigHandler);
+    
+    // Initialize GPIO
+    if (!gpio.init()) {
+        std::cerr << "GPIO setup failed" << std::endl;
+        return 1;
+    }
+    
+    std::cout << "Starting GPIO 23 toggle (Method 3: libgpiod)" << std::endl;
+    
+    // Create sequencer
+    Sequencer seq;
+
+    // Add toggle service with name, function, priority, CPU affinity, and period (ms)
+    seq.addService("gpio23_toggle", toggleGpio, 97, 1, 100);
+    
+    // Start sequencer with 10ms master interval
+    seq.startServices(10);
+    
+    // Main loop
+    std::cout << "Toggling GPIO 23 every 100ms... Press Ctrl+C to exit" << std::endl;
+    while (!quit) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    
+    // Stop sequencer
+    seq.stopServices();
+    
+    return 0;
+}
