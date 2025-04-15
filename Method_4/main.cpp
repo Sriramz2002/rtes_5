@@ -1,150 +1,119 @@
 /*
- * GPIO 23 toggle using direct memory mapping (Method 4)
- * Build: g++ --std=c++23 -Wall -Werror -pedantic gpio_mmap.cpp -o method4
- * 
- * This implementation directly maps GPIO registers into memory space
- * for the fastest possible GPIO control with no system call overhead.
+ * GPIO 23 toggle using ioctl interface (Method 3)
+ * Build: g++ --std=c++23 -Wall -Werror -pedantic gpio_ioctl.cpp -o gpio_ioctl
  */
 
-#include "Sequencer.hpp"
-#include <csignal>
-#include <chrono>
-#include <thread>
-#include <atomic>
-#include <iostream>
-#include <fcntl.h>
-#include <unistd.h>
-#include <sys/mman.h>
-
-// Quit flag
-std::atomic<bool> quit(false);
-
-// Signal handler
-void sigHandler(int sig) {
-    quit = true;
-}
-
-// For Raspberry Pi 4, the GPIO base address
-// Adjust this value depending on your hardware
-#define GPIO_BASE_ADDR  0xFE200000
-#define BLOCK_SIZE      (4 * 1024)
-
-// Register offsets (each is 4 bytes)
-#define GPFSEL0  0  // 0x00 /4  - Function select registers
-#define GPSET0   7  // 0x1C /4  - Pin output set registers
-#define GPCLR0   10 // 0x28 /4  - Pin output clear registers
-
-// Global pointer to mapped GPIO registers
-static volatile uint32_t* gpio = nullptr;
-static bool initialized = false;
-
-// Initialize GPIO23 as output via direct memory mapping
-bool setupGpio() {
-    // Open /dev/mem for direct memory access (requires root privileges)
-    int fd = open("/dev/mem", O_RDWR | O_SYNC);
-    if (fd < 0) {
-        std::cerr << "Failed to open /dev/mem (need sudo?)" << std::endl;
-        return false;
-    }
-
-    // Map GPIO registers into our address space
-    void* map = mmap(
-        nullptr,                // Let kernel choose the address
-        BLOCK_SIZE,             // Size to map
-        PROT_READ | PROT_WRITE, // Allow read/write access
-        MAP_SHARED,             // Share with other processes
-        fd,                     // File descriptor
-        GPIO_BASE_ADDR          // Physical address to map
-    );
-    
-    // Close fd after mapping (no longer needed)
-    close(fd);
-
-    if (map == MAP_FAILED) {
-        std::cerr << "mmap failed: " << strerror(errno) << std::endl;
-        return false;
-    }
-
-    // Set global pointer to mapped memory
-    gpio = reinterpret_cast<volatile uint32_t*>(map);
-
-    // Configure GPIO23 as output
-    // Calculate which GPFSEL register controls pin 23
-    int reg = GPFSEL0 + (23 / 10);  // For GPIO23, this is GPFSEL2
-    int shift = (23 % 10) * 3;      // Bit position within register
-    
-    // Clear the 3 bits for this pin
-    uint32_t mask = 0b111 << shift;
-    uint32_t value = gpio[reg];
-    value &= ~mask;
-    
-    // Set as output (001)
-    value |= (0b001 << shift);
-    gpio[reg] = value;
-
-    initialized = true;
-    std::cout << "GPIO 23 initialized via direct memory mapping" << std::endl;
-    return true;
-}
-
-// Toggle GPIO23 using direct register access
-void toggleGpio() {
-    if (!initialized) return;
-    
-    static bool state = false;
-    state = !state;
-    
-    if (state) {
-        // Set GPIO23 high by setting bit in GPSET0
-        gpio[GPSET0] = (1 << 23);
-    } else {
-        // Set GPIO23 low by setting bit in GPCLR0
-        gpio[GPCLR0] = (1 << 23);
-    }
-}
-
-// Clean up mapped memory
-void cleanupGpio() {
-    if (gpio) {
-        munmap((void*)gpio, BLOCK_SIZE);
-        gpio = nullptr;
-        initialized = false;
-        std::cout << "GPIO mapping released" << std::endl;
-    }
-}
-
-int main() {
-    // Register signal handler
-    std::signal(SIGINT, sigHandler);
-    
-    std::cout << "Starting GPIO 23 toggle (Method 4: direct memory mapping)" << std::endl;
-    
-    // Set up memory-mapped GPIO
-    if (!setupGpio()) {
-        std::cerr << "Failed to set up GPIO" << std::endl;
-        return 1;
-    }
-    
-    // Create sequencer
-    Sequencer seq;
-    
-    // Add toggle service (100ms period)
-    seq.addService(toggleGpio, 1, 97, 100);
-    
-    // Start sequencer
-    seq.startServices();
-    
-    std::cout << "Toggling GPIO 23 every 100ms... Press Ctrl+C to exit" << std::endl;
-    
-    // Wait for Ctrl+C
-    while (!quit) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-    
-    // Clean up
-    seq.stopServices();
-    cleanupGpio();
-    
-    std::cout << "Program terminated" << std::endl;
-    return 0;
-}
+ #include "Sequencer.hpp"
+ #include <csignal>
+ #include <chrono>
+ #include <thread>
+ #include <atomic>
+ #include <cstdio>
+ #include <fcntl.h>
+ #include <unistd.h>
+ #include <sys/ioctl.h>
+ #include <linux/gpio.h>
+ #include <cstring>
+ #include <iostream>
+ 
+ // Quit signal flag
+ std::atomic<bool> stop(false);
+ 
+ // Signal handler
+ void sigCatch(int sig) {
+     stop = true;
+ }
+ 
+ // File descriptors for GPIO access
+ int chip = -1;
+ int line = -1;
+ 
+ bool setupGpio() {
+     // Open GPIO chip device file
+     // This uses the character device interface introduced in Linux 4.8+
+     chip = open("/dev/gpiochip0", O_RDWR);
+     if (chip < 0) {
+         perror("Open GPIO chip failed");
+         return false;
+     }
+ 
+     // Set up GPIO request structure
+     // IOCTL is used to get a handle to the specific GPIO line
+     struct gpiohandle_request req = {};
+     req.lineoffsets[0] = 23;  // Using GPIO 23
+     req.flags = GPIOHANDLE_REQUEST_OUTPUT;  // Set as output
+     req.lines = 1;  // Request 1 line
+     req.default_values[0] = 0;  // Initial value low
+     std::strcpy(req.consumer_label, "gpio_toggle");  // Name our controller
+ 
+     // Request GPIO line handle via ioctl
+     // This gives us a file descriptor that controls the specific GPIO line
+     if (ioctl(chip, GPIO_GET_LINEHANDLE_IOCTL, &req) < 0) {
+         perror("GPIO line request failed");
+         close(chip);
+         chip = -1;
+         return false;
+     }
+ 
+     // Store the line file descriptor
+     line = req.fd;
+     std::cout << "GPIO 23 initialized via ioctl" << std::endl;
+     return true;
+ }
+ 
+ void cleanGpio() {
+     // Close file descriptors
+     if (line >= 0) close(line);
+     if (chip >= 0) close(chip);
+     line = -1;
+     chip = -1;
+     std::cout << "GPIO 23 resources released" << std::endl;
+ }
+ 
+ void toggleGpio() {
+     static bool state = false;
+     if (line < 0) return;  // Safety check
+ 
+     // Data structure for setting GPIO values
+     struct gpiohandle_data data = {};
+     data.values[0] = state ? 1 : 0;
+     
+     // Set GPIO value using ioctl
+     // This directly communicates with the kernel's GPIO subsystem
+     ioctl(line, GPIOHANDLE_SET_LINE_VALUES_IOCTL, &data);
+ 
+     // Toggle state for next call
+     state = !state;
+ }
+ 
+ int main() {
+     // Register signal handler
+     std::signal(SIGINT, sigCatch);
+     
+     std::cout << "Starting GPIO 23 toggle (Method 3: ioctl)" << std::endl;
+     
+     // Initialize GPIO with ioctl
+     if (!setupGpio()) {
+         std::cerr << "Failed to set up GPIO 23" << std::endl;
+         return 1;
+     }
+     
+     // Create sequencer and add service
+     Sequencer seq;
+     seq.addService(toggleGpio, 1, 97, 100);
+     seq.startServices();
+     
+     std::cout << "Toggling GPIO 23 every 100ms... Press Ctrl+C to exit" << std::endl;
+     
+     // Wait for termination signal
+     while (!stop) {
+         std::this_thread::sleep_for(std::chrono::milliseconds(100));
+     }
+     
+     // Clean up
+     seq.stopServices();
+     cleanGpio();
+     
+     std::cout << "Program terminated" << std::endl;
+     return 0;
+ }
