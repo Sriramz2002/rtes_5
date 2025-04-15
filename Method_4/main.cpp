@@ -17,13 +17,6 @@
 #include <sys/mman.h>
 #include <cstring>
 
-// Quit flag
-std::atomic<bool> quit(false);
-
-// Signal handler
-void sigHandler(int sig) {
-    quit = true;
-}
 
 // For Raspberry Pi 4, the GPIO base address
 // Adjust this value depending on your hardware
@@ -115,9 +108,7 @@ void cleanupGpio() {
 }
 
 int main() {
-    // Register signal handler
-    std::signal(SIGINT, sigHandler);
-    
+        
     std::cout << "Starting GPIO 23 toggle (Method 4: direct memory mapping)" << std::endl;
     
     // Set up memory-mapped GPIO
@@ -138,7 +129,7 @@ int main() {
     std::cout << "Toggling GPIO 23 every 100ms... Press Ctrl+C to exit" << std::endl;
     
     // Wait for Ctrl+C
-    while (!quit) {
+    while (true) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
     

@@ -12,13 +12,7 @@
 #include <iostream>
 #include <gpiod.h>   // libgpiod
 
-// Global termination flag
-std::atomic<bool> quit(false);
 
-// Signal handler for Ctrl+C
-void sigHandler(int sig) {
-    quit = true;
-}
 
 // RAII class for GPIO handling with libgpiod
 class GpioHandler {
@@ -123,10 +117,8 @@ void cleanGpio() {
     gpio.cleanup();
 }
 
-int main() {
-    // Setup signal handler
-    std::signal(SIGINT, sigHandler);
-    
+int main()
+ {
     // Initialize GPIO
     if (!gpio.init()) {
         std::cerr << "GPIO setup failed" << std::endl;
@@ -146,7 +138,7 @@ int main() {
     
     // Main loop
     std::cout << "Toggling GPIO 23 every 100ms... Press Ctrl+C to exit" << std::endl;
-    while (!quit) {
+    while (true) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
     
