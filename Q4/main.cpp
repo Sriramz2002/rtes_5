@@ -7,13 +7,13 @@
 // Method 1: Toggle GPIO using shell command with pinctrl
 void toggleGpio23ShellCmd()
 {
-    static bool state = false;
-    if (state) {
-        std::system("pinctrl set 23 op dh");  // Set GPIO 23 High
+    static bool toggle = false;
+    if (toggle) {
+        std::system("raspi-gpio set 23 op dh");  // Set GPIO 23 High
     } else {
-        std::system("pinctrl set 23 op dl");  // Set GPIO 23 Low
+        std::system("raspi-gpio set 23 op dl");  // Set GPIO 23 Low
     }
-    state = !state;
+    toggle = !toggle;
 }
 
 int main()
