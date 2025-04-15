@@ -9,9 +9,9 @@ void toggleGpio23ShellCmd()
 {
     static bool toggle = false;
     if (toggle) {
-        std::system("raspi-gpio set 23 op dh");  // Set GPIO 23 High
+        std::system("pinctrl set 23 op dh");  // Set GPIO 23 High
     } else {
-        std::system("raspi-gpio set 23 op dl");  // Set GPIO 23 Low
+        std::system("pinctrl set 23 op dl");  // Set GPIO 23 Low
     }
     toggle = !toggle;
 }
